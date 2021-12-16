@@ -12,13 +12,17 @@ app.use(cors());
 app.use(express.json());
 
 
+function toAddress(pub) {
+  const addrHash = keccak256(pub).toString('hex');
+  return '0x' + addrHash.substring(addrHash.length-40, addrHash.length); 
+}
+
+
 function getKeyPair() {
   const key = ec.genKeyPair();
   const public = key.getPublic().encode('hex');
-  var addr = keccak256(public).toString('hex');
+  const addr = toAddress(public);
 
-  // shorten according to ethereum standard
-  addr = '0x' + addr.substring(addr.length-40, addr.length);
   return {
     private_key: key.getPrivate().toString('hex'),
     public_key: public,
@@ -26,10 +30,28 @@ function getKeyPair() {
   }
 }
 
+/**
+ * EXAMPLE KEYPAIR FOR SAKE OF ILLUSTRATION
+ */
+const EXAMPLE_PK='bbbb709d7b1a26dae5aa3db010ec827900e15651021c686b1116128fc9a7891f'
+const exampleKeyPair = {
+  private_key: EXAMPLE_PK,
+  public_key: ec.keyFromPrivate(EXAMPLE_PK, 'hex').getPublic().encode('hex'),
+};
+exampleKeyPair.address = toAddress(exampleKeyPair.public_key)
+
+
 const accounts = {
-  0: getKeyPair(),
+  0: exampleKeyPair,
   1: getKeyPair(),
   2: getKeyPair(),
+}
+
+// Simulate recovering public key from txs on chain
+const keyTable = {
+  [accounts[0].address]: accounts[0].public_key,
+  [accounts[1].address]: accounts[1].public_key,
+  [accounts[2].address]: accounts[2].public_key,
 }
 
 const balances = {
@@ -59,8 +81,30 @@ app.get('/balance/:address', (req, res) => {
   res.send({ balance });
 });
 
+/**
+ * Validate that a signature is valid
+ * @param {JSON} tx 
+ * @return {BOOLEAN}
+ */
+function validate(tx) {
+  const {sender, recipient, amount, hash, signature} = tx;
+  const hashCheck = keccak256(JSON.stringify({
+    sender, amount, recipient,
+  })).toString('hex');
+
+  const key = ec.keyFromPublic(keyTable[sender], 'hex');
+
+  return (hash === hashCheck) && key.verify(hash, signature);
+}
+
 app.post('/send', (req, res) => {
-  const {sender, recipient, amount} = req.body;
+  const {sender, recipient, amount, hash, signature} = req.body;
+  const tx = req.body;
+
+  if (!validate(tx)) {
+    res.send({balance: balances[sender]}); return;
+  }
+
   balances[sender] -= amount;
   balances[recipient] = (balances[recipient] || 0) + +amount;
   res.send({ balance: balances[sender] });
